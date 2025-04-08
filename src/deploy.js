@@ -18,7 +18,7 @@ async function startSshAgent(privateKey) {
         core.info(`SSH Agent started with PID: ${agentPid}`);
 
         core.info('Adding SSH key to agent...');
-        const sshAdd = await exec.getExecOutput('ssh-add', ['-'], {
+        await exec.getExecOutput('ssh-add', ['-'], {
             input: Buffer.from(privateKey),
             silent: true
         });

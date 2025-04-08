@@ -1,7 +1,6 @@
 const core = require('@actions/core');
 const exec = require('@actions/exec');
 const fs = require('fs');
-const path = require('path');
 
 // Mock the @actions/core module
 jest.mock('@actions/core', () => ({
@@ -55,7 +54,7 @@ describe('SFTP Deploy Action', () => {
     fs.readdirSync.mockReturnValue(['file1.js', 'file2.css']);
     
     // Mock fs.statSync to return file stats
-    fs.statSync.mockImplementation((filePath) => ({
+    fs.statSync.mockImplementation((_filePath) => ({
       isDirectory: () => false,
       isFile: () => true
     }));
