@@ -1,0 +1,19 @@
+{
+    "name": "sftp-deploy-action",
+    "version": "1.0.0",
+    "description": "GitHub Action to deploy files via SFTP using SSH key authentication",
+    "main": "src/deploy.js",
+    "keywords": [
+      "github",
+      "action",
+      "sftp",
+      "deploy",
+      "ssh"
+    ],
+    "author": "Your Name",
+    "license": "MIT",
+    "dependencies": {
+      "@actions/core": "^1.10.0",
+      "@actions/exec": "^1.1.1"
+    }
+  }

@@ -1,0 +1,47 @@
+name: Test Action
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: Run tests
+        run: npm test
+        
+      - name: Run lint
+        run: npm run lint
+
+  # Test the action with a mock server
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup test environment
+        run: |
+          mkdir -p ./dist
+          echo "test" > ./dist/test.txt
+      
+      - name: Test action
+        uses: ./
+        with:
+          host: localhost
+          username: test
+          private-key: ${{ secrets.TEST_SSH_KEY }}
+          source-dir: './dist'
+          remote-dir: '/tmp/test'
