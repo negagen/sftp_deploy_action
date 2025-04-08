@@ -1,7 +1,7 @@
-const core = require('@actions/core');
-const exec = require('@actions/exec');
-const fs = require('fs');
-const path = require('path');
+import core from '@actions/core';
+import exec from '@actions/exec';
+import fs from 'fs';
+import path from 'path';
 
 async function startSshAgent(privateKey) {
     core.startGroup('🔐 Setting up SSH Agent');
