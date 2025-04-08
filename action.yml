@@ -36,5 +36,5 @@ outputs:
     description: 'Timestamp of deployment completion'
 
 runs:
-  using: 'node22'
+  using: 'node20'
   main: 'src/deploy.js'
