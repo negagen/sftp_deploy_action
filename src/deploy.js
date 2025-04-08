@@ -176,4 +176,10 @@ process.on('unhandledRejection', (error) => {
     process.exit(1);
 });
 
-deploy();
+// Export the deploy function for testing
+module.exports = { deploy };
+
+// Only run deploy() if this file is being run directly
+if (require.main === module) {
+    deploy();
+}

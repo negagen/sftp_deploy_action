@@ -4,16 +4,27 @@
     "description": "GitHub Action to deploy files via SFTP using SSH key authentication",
     "main": "src/deploy.js",
     "keywords": [
-      "github",
-      "action",
-      "sftp",
-      "deploy",
-      "ssh"
+        "github",
+        "action",
+        "sftp",
+        "deploy",
+        "ssh"
     ],
     "author": "Brandom Vasquez",
     "license": "MIT",
+    "scripts": {
+        "test": "jest",
+        "lint": "eslint ."
+    },
     "dependencies": {
-      "@actions/core": "^1.11.1",
-      "@actions/exec": "^1.1.1"
+        "@actions/core": "^1.11.1",
+        "@actions/exec": "^1.1.1"
+    },
+    "devDependencies": {
+        "@eslint/js": "^9.24.0",
+        "@types/jest": "^29.5.14",
+        "eslint": "^9.24.0",
+        "globals": "^16.0.0",
+        "jest": "^29.7.0"
     }
-  }
+}
