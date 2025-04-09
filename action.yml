@@ -13,18 +13,18 @@ inputs:
   username:
     description: 'SFTP username'
     required: true
-  private-key:
+  private_key:
     description: 'SSH private key'
     required: true
   port:
     description: 'SFTP port'
     required: false
     default: '22'
-  source-dir:
+  source_dir:
     description: 'Local directory to upload'
     required: false
     default: './dist'
-  remote-dir:
+  remote_dir:
     description: 'Remote directory on the server'
     required: false
     default: '/var/www/html'

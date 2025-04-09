@@ -87,6 +87,19 @@ jobs:
         with:
           host: localhost
           username: ${{ runner.user }}
-          private-key: ${{ env.TEST_SSH_KEY }}
-          source-dir: './dist'
-          remote-dir: '/tmp/test'
+          private_key: ${{ env.TEST_SSH_KEY }}
+          source_dir: './dist'
+          remote_dir: '/tmp/test'
+      
+      # Add verification step to check results
+      - name: Verify upload
+        run: |
+          echo "Checking if file was uploaded:"
+          ls -la /tmp/test
+          if [ -f "/tmp/test/test.txt" ]; then
+            echo "✅ File was uploaded successfully"
+            cat /tmp/test/test.txt
+          else
+            echo "❌ File upload failed"
+            exit 1
+          fi
