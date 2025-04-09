@@ -3,7 +3,6 @@
     "version": "0.1.0",
     "description": "GitHub Action to deploy files via SFTP using SSH key authentication",
     "main": "src/deploy.js",
-    "type": "module",
     "keywords": [
         "github",
         "action",

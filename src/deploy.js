@@ -2,15 +2,32 @@ const core = require('@actions/core');
 const exec = require('@actions/exec');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 async function startSshAgent(privateKey) {
     core.startGroup('🔐 Setting up SSH Agent');
     try {
+        if (!privateKey) {
+            throw new Error('Private key is required');
+        }
+
         core.info('Starting ssh-agent process...');
         const agentInfo = await exec.getExecOutput('ssh-agent', ['-s']);
+        core.info('ssh-agent output:', agentInfo);
         
-        const authSock = agentInfo.stdout.match(/SSH_AUTH_SOCK=([^;]*)/)[1];
-        const agentPid = agentInfo.stdout.match(/SSH_AGENT_PID=([^;]*)/)[1];
+        if (!agentInfo || !agentInfo.stdout) {
+            throw new Error('Failed to get ssh-agent output');
+        }
+
+        const authSockMatch = agentInfo.stdout.match(/SSH_AUTH_SOCK=([^;]*)/);
+        const agentPidMatch = agentInfo.stdout.match(/SSH_AGENT_PID=([^;]*)/);
+
+        if (!authSockMatch || !agentPidMatch) {
+            throw new Error('Failed to parse ssh-agent output');
+        }
+
+        const authSock = authSockMatch[1];
+        const agentPid = agentPidMatch[1];
         
         process.env.SSH_AUTH_SOCK = authSock;
         process.env.SSH_AGENT_PID = agentPid;
@@ -31,6 +48,7 @@ async function startSshAgent(privateKey) {
         };
     } catch (error) {
         core.error('Failed to setup SSH agent');
+        core.error(error);
         throw error;
     } finally {
         core.endGroup();
@@ -50,122 +68,81 @@ async function getFileCount(directory) {
 }
 
 async function deploy() {
-    let cleanup = null;
-    
+    console.log('Starting deployment process...');
     try {
-        // Log action start
-        core.info('🚀 Starting SFTP deployment...');
-        
-        // Get and validate inputs
-        core.startGroup('📥 Validating inputs');
+        // Validate inputs
+        console.log('Validating input parameters...');
         const host = core.getInput('host', { required: true });
         const username = core.getInput('username', { required: true });
         const port = core.getInput('port') || '22';
-        const sourceDir = core.getInput('source-dir') || './dist';
-        const remoteDir = core.getInput('remote-dir') || '/var/www/html';
-        const privateKey = core.getInput('private-key', { required: true });
+        const sourceDir = core.getInput('source_dir', { required: true });
+        const remoteDir = core.getInput('remote_dir', { required: true });
+        const privateKey = core.getInput('private_key', { required: true });
 
-        // Mask private key in logs
+        // Mask private key in logs for security
         core.setSecret(privateKey);
 
-        core.info(`Host: ${host}`);
-        core.info(`Username: ${username}`);
-        core.info(`Port: ${port}`);
-        core.info(`Source directory: ${sourceDir}`);
-        core.info(`Remote directory: ${remoteDir}`);
+        console.log(`Configuration validated:
+            - Host: ${host}
+            - Username: ${username}
+            - Port: ${port}
+            - Source Directory: ${sourceDir}
+            - Remote Directory: ${remoteDir}
+            - Private Key Length: ${privateKey ? privateKey.length : 0} characters`);
 
-        if (!fs.existsSync(sourceDir)) {
-            throw new Error(`Source directory ${sourceDir} does not exist`);
-        }
-
-        const fileCount = await getFileCount(sourceDir);
-        core.info(`Found ${fileCount} files to upload`);
-        core.endGroup();
-
-        // Setup SSH agent
-        cleanup = await startSshAgent(privateKey);
+        // Start SSH agent
+        console.log('Starting SSH agent...');
+        const agentInfo = await startSshAgent(privateKey);
+        console.log('SSH agent started successfully:', agentInfo);
 
         // Create batch file
-        core.startGroup('📝 Preparing SFTP batch file');
-        const batchFilePath = path.join(process.env.RUNNER_TEMP || '/tmp', 'sftp_batch');
-        const batchCommands = [
-            'mkdir -p ' + remoteDir,
-            'cd ' + remoteDir,
-            'put -r ' + sourceDir + '/* .'
-        ].join('\n');
+        console.log('Creating SFTP batch file...');
+        const batchFilePath = path.join(os.tmpdir(), 'sftp_batch');
+        const fileCount = await getFileCount(sourceDir);
+        console.log(`Found ${fileCount} files to transfer in source directory`);
 
-        fs.writeFileSync(batchFilePath, batchCommands);
-        core.info('SFTP batch file created');
-        core.debug(`Batch file contents:\n${batchCommands}`);
-        core.endGroup();
+        const batchFileContent = `cd ${remoteDir}\nput -r ${sourceDir}/*`;
+        await fs.promises.writeFile(batchFilePath, batchFileContent);
+        console.log('SFTP batch file created successfully at:', batchFilePath);
+        console.log('Batch file contents:', batchFileContent);
+
+        // Execute SFTP transfer
+        console.log('Preparing SFTP command...');
+        const sftpCommand = `sftp -b ${batchFilePath} -P ${port} ${username}@${host}`;
+        console.log('Executing SFTP command:', sftpCommand);
+
+        console.log('Starting file transfer...');
+        const result = await exec.getExecOutput(sftpCommand);
+        console.log('SFTP command output:', result.stdout);
+        if (result.stderr) {
+            console.warn('SFTP command stderr:', result.stderr);
+        }
+        console.log(`SFTP transfer completed with exit code: ${result.exitCode}`);
+
+        // Cleanup
+        console.log('Starting cleanup process...');
+        try {
+            await fs.promises.unlink(batchFilePath);
+            console.log('Batch file deleted successfully');
+        } catch (error) {
+            console.warn('Error deleting batch file:', error);
+        }
 
         try {
-            // Execute SFTP transfer
-            core.startGroup('📤 Executing SFTP transfer');
-            const sftpOptions = [
-                '-P', port,
-                '-o', 'StrictHostKeyChecking=no',
-                '-b', batchFilePath,
-                `${username}@${host}`
-            ];
-
-            // Set up output handling
-            const options = {
-                listeners: {
-                    stdout: (data) => {
-                        const output = data.toString().trim();
-                        if (output) core.info(output);
-                    },
-                    stderr: (data) => {
-                        const error = data.toString().trim();
-                        if (error.includes('Error') || error.includes('fatal')) {
-                            core.error(error);
-                        } else if (error.includes('Warning')) {
-                            core.warning(error);
-                        } else {
-                            core.info(error);
-                        }
-                    }
-                }
-            };
-
-            core.info('Starting file transfer...');
-            await exec.exec('sftp', sftpOptions, options);
-            
-            core.info('✅ SFTP transfer completed successfully');
-            core.endGroup();
-
-        } finally {
-            // Cleanup batch file
-            core.startGroup('🧹 Cleanup');
-            try {
-                fs.unlinkSync(batchFilePath);
-                core.info('Batch file deleted');
-            } catch (error) {
-                core.warning(`Failed to delete batch file: ${error.message}`);
-            }
-            core.endGroup();
+            await exec.exec('ssh-agent', ['-k']);
+            console.log('SSH agent killed successfully');
+        } catch (error) {
+            console.warn('Error killing SSH agent:', error);
         }
 
-        // Set output
-        core.setOutput('deployed-files', fileCount);
-        core.setOutput('deployment-time', new Date().toISOString());
-
+        console.log('Deployment completed successfully!');
+        return true;
     } catch (error) {
-        core.error('❌ Deployment failed');
-        core.setFailed(error.message);
-    } finally {
-        // Cleanup SSH agent
-        if (cleanup) {
-            core.startGroup('🧹 Cleaning up SSH agent');
-            try {
-                await cleanup();
-                core.info('SSH agent terminated');
-            } catch (error) {
-                core.warning(`Failed to cleanup ssh-agent: ${error.message}`);
-            }
-            core.endGroup();
+        console.error('Deployment failed with error:', error);
+        if (error.stack) {
+            console.error('Error stack trace:', error.stack);
         }
+        throw error;
     }
 }
 
@@ -176,10 +153,176 @@ process.on('unhandledRejection', (error) => {
     process.exit(1);
 });
 
-// Export the deploy function for testing
-module.exports = { deploy };
+// Export the deploy function for testing with optional dependency injection
+module.exports = { 
+    deploy,
+    // Add an injectable version for testing
+    deployWithDependencies: async (params = {}, dependencies = {}) => {
+        const {
+            host = core.getInput('host', { required: true }),
+            username = core.getInput('username', { required: true }),
+            port = core.getInput('port') || '22',
+            sourceDir = core.getInput('source_dir', { required: true }),
+            remoteDir = core.getInput('remote_dir', { required: true }),
+            privateKey = core.getInput('private_key', { required: true })
+        } = params;
+
+        const {
+            coreModule = core,
+            execModule = exec,
+            fsModule = fs,
+            osModule = os,
+            pathModule = path,
+            processEnv = process.env
+        } = dependencies;
+
+        console.log('Starting deployment process with injected dependencies...');
+        try {
+            // Validate inputs
+            console.log('Validating input parameters...');
+            
+            // Mask private key in logs for security
+            coreModule.setSecret(privateKey);
+
+            console.log(`Configuration validated:
+                - Host: ${host}
+                - Username: ${username}
+                - Port: ${port}
+                - Source Directory: ${sourceDir}
+                - Remote Directory: ${remoteDir}
+                - Private Key Length: ${privateKey ? privateKey.length : 0} characters`);
+
+            // Start SSH agent
+            console.log('Starting SSH agent...');
+            
+            // Custom startSshAgent with injected dependencies
+            const startSshAgentWithDeps = async (pk) => {
+                coreModule.startGroup('🔐 Setting up SSH Agent');
+                try {
+                    if (!pk) {
+                        throw new Error('Private key is required');
+                    }
+
+                    coreModule.info('Starting ssh-agent process...');
+                    const agentInfo = await execModule.getExecOutput('ssh-agent', ['-s']);
+                    coreModule.info('ssh-agent output:', agentInfo);
+                    
+                    if (!agentInfo || !agentInfo.stdout) {
+                        throw new Error('Failed to get ssh-agent output');
+                    }
+
+                    const authSockMatch = agentInfo.stdout.match(/SSH_AUTH_SOCK=([^;]*)/);
+                    const agentPidMatch = agentInfo.stdout.match(/SSH_AGENT_PID=([^;]*)/);
+
+                    if (!authSockMatch || !agentPidMatch) {
+                        throw new Error('Failed to parse ssh-agent output');
+                    }
+
+                    const authSock = authSockMatch[1];
+                    const agentPid = agentPidMatch[1];
+                    
+                    processEnv.SSH_AUTH_SOCK = authSock;
+                    processEnv.SSH_AGENT_PID = agentPid;
+                    
+                    coreModule.info(`SSH Agent started with PID: ${agentPid}`);
+
+                    coreModule.info('Adding SSH key to agent...');
+                    await execModule.getExecOutput('ssh-add', ['-'], {
+                        input: Buffer.from(pk),
+                        silent: true
+                    });
+                    
+                    coreModule.info('SSH key added successfully');
+                    
+                    return async () => {
+                        coreModule.info('Terminating SSH agent...');
+                        await execModule.exec('ssh-agent', ['-k']);
+                    };
+                } catch (error) {
+                    coreModule.error('Failed to setup SSH agent');
+                    coreModule.error(error);
+                    throw error;
+                } finally {
+                    coreModule.endGroup();
+                }
+            };
+
+            const agentInfo = await startSshAgentWithDeps(privateKey);
+            console.log('SSH agent started successfully:', agentInfo);
+
+            // Create batch file
+            console.log('Creating SFTP batch file...');
+            const batchFilePath = pathModule.join(osModule.tmpdir(), 'sftp_batch');
+            
+            // Custom getFileCount with injected dependencies
+            const getFileCountWithDeps = async (directory) => {
+                let count = 0;
+                const files = fsModule.readdirSync(directory, { recursive: true });
+                for (const file of files) {
+                    const fullPath = pathModule.join(directory, file);
+                    if (fsModule.statSync(fullPath).isFile()) {
+                        count++;
+                    }
+                }
+                return count;
+            };
+            
+            const fileCount = await getFileCountWithDeps(sourceDir);
+            console.log(`Found ${fileCount} files to transfer in source directory`);
+
+            const batchFileContent = `cd ${remoteDir}\nput -r ${sourceDir}/*`;
+            await fsModule.promises.writeFile(batchFilePath, batchFileContent);
+            console.log('SFTP batch file created successfully at:', batchFilePath);
+            console.log('Batch file contents:', batchFileContent);
+
+            // Execute SFTP transfer
+            console.log('Preparing SFTP command...');
+            const sftpCommand = `sftp -b ${batchFilePath} -P ${port} ${username}@${host}`;
+            console.log('Executing SFTP command:', sftpCommand);
+
+            console.log('Starting file transfer...');
+            const result = await execModule.getExecOutput(sftpCommand);
+            console.log('SFTP command output:', result.stdout);
+            if (result.stderr) {
+                console.warn('SFTP command stderr:', result.stderr);
+            }
+            console.log(`SFTP transfer completed with exit code: ${result.exitCode}`);
+
+            // Cleanup
+            console.log('Starting cleanup process...');
+            try {
+                await fsModule.promises.unlink(batchFilePath);
+                console.log('Batch file deleted successfully');
+            } catch (error) {
+                console.warn('Error deleting batch file:', error);
+            }
+
+            try {
+                await execModule.exec('ssh-agent', ['-k']);
+                console.log('SSH agent killed successfully');
+            } catch (error) {
+                console.warn('Error killing SSH agent:', error);
+            }
+
+            console.log('Deployment completed successfully!');
+            return true;
+        } catch (error) {
+            console.error('Deployment failed with error:', error);
+            if (error.stack) {
+                console.error('Error stack trace:', error.stack);
+            }
+            throw error;
+        }
+    }
+};
 
 // Only run deploy() if this file is being run directly
 if (require.main === module) {
-    deploy();
+    console.log('Running deploy.js directly');
+    deploy().then(() => {
+        console.log('Deployment completed successfully');
+    }).catch(error => {
+        console.error('Deployment failed:', error);
+        process.exit(1);
+    });
 }
