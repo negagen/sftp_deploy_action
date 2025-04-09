@@ -5,10 +5,11 @@ A GitHub Action to securely deploy files to a remote server via SFTP using SSH k
 ## Features
 
 - 🔒 Secure SSH key authentication
-- 📁 Recursive directory upload
+- 📁 Individual file transfer with improved reliability
 - 📊 Detailed progress logging
-- 🚀 Fast and reliable transfers
-- 🧹 Automatic cleanup
+- 🚀 Fast and efficient file deployment
+- 🧹 Automatic cleanup of temporary files
+- 🛠️ Automatic installation of SSH tools if needed
 
 ## Usage
 
@@ -70,6 +71,18 @@ jobs:
           remote-dir: '/var/www/html'
 ```
 
+## How It Works
+
+The action performs the following steps:
+
+1. Checks and installs OpenSSH tools if they're missing
+2. Validates all input parameters
+3. Normalizes the private key (ensuring it ends with a newline)
+4. Creates a temporary identity file for authentication
+5. Generates an SFTP batch file with individual file transfer commands
+6. Transfers files using SFTP with strict security settings
+7. Cleans up all temporary files
+
 ## Setting Up SSH Keys
 
 1. Generate a new SSH key pair:
@@ -80,6 +93,17 @@ jobs:
 2. Add the public key to your server's `~/.ssh/authorized_keys`
 
 3. Add the private key to your GitHub repository secrets as `SSH_PRIVATE_KEY`
+
+## Troubleshooting
+
+- **Permission Issues**: Ensure the private key has the correct format with a newline at the end
+- **Connection Failures**: Verify firewall rules allow SFTP connections on the specified port
+- **SFTP Command Errors**: Check server logs for detailed error information
+
+## Contributors
+
+- Original implementation
+- [@negagen](https://github.com/negagen) - Enhanced error handling, private key normalization, and file transfer reliability
 
 ## License
 
