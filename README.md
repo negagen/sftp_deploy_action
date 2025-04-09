@@ -102,7 +102,6 @@ The action performs the following steps:
 
 ## Contributors
 
-- Original implementation
 - [@negagen](https://github.com/negagen) - Enhanced error handling, private key normalization, and file transfer reliability
 
 ## License
