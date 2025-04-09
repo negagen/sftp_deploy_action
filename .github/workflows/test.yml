@@ -47,11 +47,46 @@ jobs:
           mkdir -p ./dist
           echo "test" > ./dist/test.txt
       
+      - name: Set up SFTP server
+        run: |
+          # Install OpenSSH server
+          sudo apt-get update && sudo apt-get install -y openssh-server
+          
+          # Create test directory
+          sudo mkdir -p /tmp/test
+          
+          # Generate SSH key for testing
+          ssh-keygen -t rsa -f /tmp/id_rsa -N ""
+          
+          # Add public key to authorized_keys
+          mkdir -p ~/.ssh
+          cat /tmp/id_rsa.pub >> ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/authorized_keys
+          
+          # Configure SSH server for SFTP
+          sudo cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
+          echo "Match User $(whoami)" | sudo tee -a /etc/ssh/sshd_config
+          echo "    ForceCommand internal-sftp" | sudo tee -a /etc/ssh/sshd_config
+          echo "    PasswordAuthentication no" | sudo tee -a /etc/ssh/sshd_config
+          
+          # Restart SSH service
+          sudo systemctl restart ssh
+          
+          # Set permissions for SFTP target dir
+          sudo chmod 755 /tmp/test
+          sudo chown $(whoami):$(whoami) /tmp/test
+          
+          # Save private key to GitHub secrets (for this run only)
+          PRIVATE_KEY=$(cat /tmp/id_rsa)
+          echo "TEST_SSH_KEY<<EOF" >> $GITHUB_ENV
+          echo "$PRIVATE_KEY" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+      
       - name: Test action
         uses: ./
         with:
           host: localhost
-          username: test
-          private-key: ${{ secrets.TEST_SSH_KEY }}
+          username: ${{ runner.user }}
+          private-key: ${{ env.TEST_SSH_KEY }}
           source-dir: './dist'
           remote-dir: '/tmp/test'
