@@ -49,14 +49,15 @@ jobs:
       
       - name: Set up SFTP server
         run: |
-          # Install OpenSSH server
+          # Install OpenSSH server (client will be installed by the action)
           sudo apt-get update && sudo apt-get install -y openssh-server
           
           # Create test directory
           sudo mkdir -p /tmp/test
           
-          # Generate SSH key for testing
-          ssh-keygen -t rsa -f /tmp/id_rsa -N ""
+          # Generate SSH key for testing - explicitly specify PEM format
+          ssh-keygen -m PEM -t rsa -f /tmp/id_rsa -N ""
+          chmod 600 /tmp/id_rsa
           
           # Get current username and set as environment variable
           echo "CURRENT_USER=$(whoami)" >> $GITHUB_ENV
@@ -66,23 +67,64 @@ jobs:
           cat /tmp/id_rsa.pub >> ~/.ssh/authorized_keys
           chmod 600 ~/.ssh/authorized_keys
           
+          # Configure SSH for host key checking bypass
+          echo "Host localhost" > ~/.ssh/config
+          echo "    StrictHostKeyChecking no" >> ~/.ssh/config
+          echo "    UserKnownHostsFile=/dev/null" >> ~/.ssh/config
+          chmod 600 ~/.ssh/config
+          
           # Configure SSH server for SFTP
           sudo cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
           echo "Match User $(whoami)" | sudo tee -a /etc/ssh/sshd_config
           echo "    ForceCommand internal-sftp" | sudo tee -a /etc/ssh/sshd_config
           echo "    PasswordAuthentication no" | sudo tee -a /etc/ssh/sshd_config
+          echo "    LogLevel DEBUG3" | sudo tee -a /etc/ssh/sshd_config
           
           # Restart SSH service
           sudo systemctl restart ssh
+          sudo systemctl status ssh
           
           # Set permissions for SFTP target dir
+          sudo mkdir -p /tmp/test
           sudo chmod 755 /tmp/test
           sudo chown $(whoami):$(whoami) /tmp/test
           
+          # Display debug information for troubleshooting
+          echo "==== Debug Information ===="
+          echo "User: $(whoami)"
+          echo "SSH directory contents:"
+          ls -la ~/.ssh/
+          echo "SSH config:"
+          cat ~/.ssh/config
+          echo "Private key permissions:"
+          ls -la /tmp/id_rsa
+          echo "Target directory permissions:"
+          ls -la /tmp
+          
+          # Create a test file for direct SFTP transfer test
+          echo "sftp test content" > /tmp/sftp_test.txt
+          
+          # Test basic SFTP connectivity with a simple command
+          echo "put /tmp/sftp_test.txt /tmp/test/" > /tmp/sftp_test_batch
+          echo "Testing SFTP connectivity as user: $(whoami)"
+          sftp -vv -o StrictHostKeyChecking=no -i /tmp/id_rsa -b /tmp/sftp_test_batch $(whoami)@localhost
+          
+          # Verify the test file was transferred
+          ls -la /tmp/test/
+          if [ -f "/tmp/test/sftp_test.txt" ]; then
+            echo "✅ SFTP test file was uploaded successfully"
+            cat /tmp/test/sftp_test.txt
+          else
+            echo "❌ SFTP test file upload failed"
+            exit 1
+          fi
+          
           # Save private key to GitHub secrets (for this run only)
-          PRIVATE_KEY=$(cat /tmp/id_rsa)
+          # Ensure the key is properly formatted with preserved newlines
           echo "TEST_SSH_KEY<<EOF" >> $GITHUB_ENV
-          echo "$PRIVATE_KEY" >> $GITHUB_ENV
+          cat /tmp/id_rsa >> $GITHUB_ENV
+          # Make sure there's a newline at the end
+          echo "" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
       
       - name: Test action

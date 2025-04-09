@@ -4,6 +4,43 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
+async function checkAndInstallSshTools() {
+    core.startGroup('🔧 Checking SSH tools');
+    try {
+        core.info('Checking if ssh-add is available...');
+        const sshAddResult = await exec.getExecOutput('which', ['ssh-add'], { ignoreReturnCode: true });
+        
+        if (sshAddResult.exitCode !== 0) {
+            core.info('ssh-add not found, installing OpenSSH client...');
+            
+            // Detect platform and install appropriate packages
+            if (os.platform() === 'linux') {
+                await exec.exec('sudo', ['apt-get', 'update']);
+                await exec.exec('sudo', ['apt-get', 'install', '-y', 'openssh-client']);
+            } else if (os.platform() === 'darwin') {
+                // macOS usually has OpenSSH installed
+                core.info('On macOS, OpenSSH should be pre-installed');
+            } else if (os.platform() === 'win32') {
+                core.warning('On Windows, please ensure OpenSSH is installed via Windows features');
+            }
+            
+            // Verify installation
+            const verifyResult = await exec.getExecOutput('which', ['ssh-add'], { ignoreReturnCode: true });
+            if (verifyResult.exitCode !== 0) {
+                throw new Error('Failed to install or locate ssh-add after installation attempt');
+            }
+        }
+        
+        core.info('SSH tools are available');
+    } catch (error) {
+        core.error('Failed to setup SSH tools');
+        core.error(error);
+        throw error;
+    } finally {
+        core.endGroup();
+    }
+}
+
 async function startSshAgent(privateKey) {
     core.startGroup('🔐 Setting up SSH Agent');
     try {
@@ -70,6 +107,9 @@ async function getFileCount(directory) {
 async function deploy() {
     console.log('Starting deployment process...');
     try {
+        // Check and install SSH tools if needed
+        await checkAndInstallSshTools();
+        
         // Validate inputs
         console.log('Validating input parameters...');
         const host = core.getInput('host', { required: true });
@@ -77,7 +117,13 @@ async function deploy() {
         const port = core.getInput('port') || '22';
         const sourceDir = core.getInput('source_dir', { required: true });
         const remoteDir = core.getInput('remote_dir', { required: true });
-        const privateKey = core.getInput('private_key', { required: true });
+        let privateKey = core.getInput('private_key', { required: true });
+
+        // Normalize private key: ensure it ends with a newline
+        if (!privateKey.endsWith('\n')) {
+            privateKey += '\n';
+            console.log('Added missing newline to private key');
+        }
 
         // Mask private key in logs for security
         core.setSecret(privateKey);
@@ -101,23 +147,64 @@ async function deploy() {
         const fileCount = await getFileCount(sourceDir);
         console.log(`Found ${fileCount} files to transfer in source directory`);
 
-        const batchFileContent = `cd ${remoteDir}\nput -r ${sourceDir}/*`;
+        // Create a better formatted batch file with explicit paths
+        // Ensure the remote directory exists first
+        let batchFileContent = `-mkdir ${remoteDir}\n`;  // Create directory if it doesn't exist (will be ignored if already exists)
+        batchFileContent += `cd ${remoteDir}\n`;
+        
+        // List all files in source directory and create individual put commands
+        // This is more reliable than put -r for some SFTP implementations
+        const files = fs.readdirSync(sourceDir, { withFileTypes: true });
+        for (const file of files) {
+            const sourcePath = path.join(sourceDir, file.name);
+            if (file.isFile()) {
+                batchFileContent += `put "${sourcePath}" "${file.name}"\n`;
+            }
+        }
+        
         await fs.promises.writeFile(batchFilePath, batchFileContent);
         console.log('SFTP batch file created successfully at:', batchFilePath);
         console.log('Batch file contents:', batchFileContent);
 
         // Execute SFTP transfer
         console.log('Preparing SFTP command...');
-        const sftpCommand = `sftp -b ${batchFilePath} -P ${port} ${username}@${host}`;
-        console.log('Executing SFTP command:', sftpCommand);
+        
+        // Create a temporary identity file for this connection
+        const identityFile = path.join(os.tmpdir(), 'deploy_identity');
+        await fs.promises.writeFile(identityFile, privateKey, { mode: 0o600 });
+        console.log(`Identity file created at: ${identityFile}`);
+        
+        // Use direct SFTP command with explicit identity file instead of ssh-agent
+        const sftpCommand = `sftp -v -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${identityFile} -b ${batchFilePath} -P ${port} ${username}@${host}`;
+        console.log(`Executing SFTP command: ${sftpCommand}`);
 
         console.log('Starting file transfer...');
-        const result = await exec.getExecOutput(sftpCommand);
-        console.log('SFTP command output:', result.stdout);
-        if (result.stderr) {
-            console.warn('SFTP command stderr:', result.stderr);
+        try {
+            const result = await exec.getExecOutput(sftpCommand);
+            console.log('SFTP command output:', result.stdout);
+            if (result.stderr) {
+                console.warn('SFTP command stderr:', result.stderr);
+            }
+            console.log(`SFTP transfer completed with exit code: ${result.exitCode}`);
+            
+            // Clean up temporary identity file
+            try {
+                await fs.promises.unlink(identityFile);
+                console.log('Temporary identity file deleted');
+            } catch (err) {
+                console.warn('Error deleting temporary identity file:', err);
+            }
+        } catch (sftpError) {
+            console.error('SFTP command failed:', sftpError);
+            // Clean up temporary identity file even on error
+            try {
+                await fs.promises.unlink(identityFile);
+                console.log('Temporary identity file deleted');
+            } catch (err) {
+                console.warn('Error deleting temporary identity file:', err);
+            }
+            throw sftpError;
         }
-        console.log(`SFTP transfer completed with exit code: ${result.exitCode}`);
 
         // Cleanup
         console.log('Starting cleanup process...');
@@ -178,6 +265,46 @@ module.exports = {
 
         console.log('Starting deployment process with injected dependencies...');
         try {
+            // Check and install SSH tools if needed with injected dependencies
+            const checkAndInstallSshToolsWithDeps = async () => {
+                coreModule.startGroup('🔧 Checking SSH tools');
+                try {
+                    coreModule.info('Checking if ssh-add is available...');
+                    const sshAddResult = await execModule.getExecOutput('which', ['ssh-add'], { ignoreReturnCode: true });
+                    
+                    if (sshAddResult.exitCode !== 0) {
+                        coreModule.info('ssh-add not found, installing OpenSSH client...');
+                        
+                        // Detect platform and install appropriate packages
+                        if (osModule.platform() === 'linux') {
+                            await execModule.exec('sudo', ['apt-get', 'update']);
+                            await execModule.exec('sudo', ['apt-get', 'install', '-y', 'openssh-client']);
+                        } else if (osModule.platform() === 'darwin') {
+                            // macOS usually has OpenSSH installed
+                            coreModule.info('On macOS, OpenSSH should be pre-installed');
+                        } else if (osModule.platform() === 'win32') {
+                            coreModule.warning('On Windows, please ensure OpenSSH is installed via Windows features');
+                        }
+                        
+                        // Verify installation
+                        const verifyResult = await execModule.getExecOutput('which', ['ssh-add'], { ignoreReturnCode: true });
+                        if (verifyResult.exitCode !== 0) {
+                            throw new Error('Failed to install or locate ssh-add after installation attempt');
+                        }
+                    }
+                    
+                    coreModule.info('SSH tools are available');
+                } catch (error) {
+                    coreModule.error('Failed to setup SSH tools');
+                    coreModule.error(error);
+                    throw error;
+                } finally {
+                    coreModule.endGroup();
+                }
+            };
+            
+            await checkAndInstallSshToolsWithDeps();
+            
             // Validate inputs
             console.log('Validating input parameters...');
             
@@ -270,23 +397,64 @@ module.exports = {
             const fileCount = await getFileCountWithDeps(sourceDir);
             console.log(`Found ${fileCount} files to transfer in source directory`);
 
-            const batchFileContent = `cd ${remoteDir}\nput -r ${sourceDir}/*`;
+            // Create a better formatted batch file with explicit paths
+            // Ensure the remote directory exists first
+            let batchFileContent = `-mkdir ${remoteDir}\n`;  // Create directory if it doesn't exist (will be ignored if already exists)
+            batchFileContent += `cd ${remoteDir}\n`;
+            
+            // List all files in source directory and create individual put commands
+            // This is more reliable than put -r for some SFTP implementations
+            const files = fsModule.readdirSync(sourceDir, { withFileTypes: true });
+            for (const file of files) {
+                const sourcePath = pathModule.join(sourceDir, file.name);
+                if (file.isFile()) {
+                    batchFileContent += `put "${sourcePath}" "${file.name}"\n`;
+                }
+            }
+            
             await fsModule.promises.writeFile(batchFilePath, batchFileContent);
             console.log('SFTP batch file created successfully at:', batchFilePath);
             console.log('Batch file contents:', batchFileContent);
 
             // Execute SFTP transfer
             console.log('Preparing SFTP command...');
-            const sftpCommand = `sftp -b ${batchFilePath} -P ${port} ${username}@${host}`;
-            console.log('Executing SFTP command:', sftpCommand);
+            
+            // Create a temporary identity file for this connection
+            const identityFile = pathModule.join(osModule.tmpdir(), 'deploy_identity');
+            await fsModule.promises.writeFile(identityFile, privateKey, { mode: 0o600 });
+            console.log(`Identity file created at: ${identityFile}`);
+            
+            // Use direct SFTP command with explicit identity file instead of ssh-agent
+            const sftpCommand = `sftp -v -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${identityFile} -b ${batchFilePath} -P ${port} ${username}@${host}`;
+            console.log(`Executing SFTP command: ${sftpCommand}`);
 
             console.log('Starting file transfer...');
-            const result = await execModule.getExecOutput(sftpCommand);
-            console.log('SFTP command output:', result.stdout);
-            if (result.stderr) {
-                console.warn('SFTP command stderr:', result.stderr);
+            try {
+                const result = await execModule.getExecOutput(sftpCommand);
+                console.log('SFTP command output:', result.stdout);
+                if (result.stderr) {
+                    console.warn('SFTP command stderr:', result.stderr);
+                }
+                console.log(`SFTP transfer completed with exit code: ${result.exitCode}`);
+                
+                // Clean up temporary identity file
+                try {
+                    await fsModule.promises.unlink(identityFile);
+                    console.log('Temporary identity file deleted');
+                } catch (err) {
+                    console.warn('Error deleting temporary identity file:', err);
+                }
+            } catch (sftpError) {
+                console.error('SFTP command failed:', sftpError);
+                // Clean up temporary identity file even on error
+                try {
+                    await fsModule.promises.unlink(identityFile);
+                    console.log('Temporary identity file deleted');
+                } catch (err) {
+                    console.warn('Error deleting temporary identity file:', err);
+                }
+                throw sftpError;
             }
-            console.log(`SFTP transfer completed with exit code: ${result.exitCode}`);
 
             // Cleanup
             console.log('Starting cleanup process...');
