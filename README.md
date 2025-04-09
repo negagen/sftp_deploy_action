@@ -100,9 +100,9 @@ The action performs the following steps:
 - **Connection Failures**: Verify firewall rules allow SFTP connections on the specified port
 - **SFTP Command Errors**: Check server logs for detailed error information
 
-## Contributors
+## Maintainers
 
-- [@negagen](https://github.com/negagen) - Enhanced error handling, private key normalization, and file transfer reliability
+[@negagen](https://github.com/negagen)
 
 ## License
 
