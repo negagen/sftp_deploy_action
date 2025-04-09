@@ -58,6 +58,9 @@ jobs:
           # Generate SSH key for testing
           ssh-keygen -t rsa -f /tmp/id_rsa -N ""
           
+          # Get current username and set as environment variable
+          echo "CURRENT_USER=$(whoami)" >> $GITHUB_ENV
+          
           # Add public key to authorized_keys
           mkdir -p ~/.ssh
           cat /tmp/id_rsa.pub >> ~/.ssh/authorized_keys
@@ -86,7 +89,7 @@ jobs:
         uses: ./
         with:
           host: localhost
-          username: ${{ runner.user }}
+          username: ${{ env.CURRENT_USER }}
           private_key: ${{ env.TEST_SSH_KEY }}
           source_dir: './dist'
           remote_dir: '/tmp/test'
