@@ -1,7 +1,7 @@
-import js from '@eslint/js';
-import globals from 'globals';
+const js = require('@eslint/js');
+const globals = require('globals');
 
-export default [
+module.exports = [
   {
     ignores: ['node_modules/**', 'dist/**']
   },
@@ -17,7 +17,7 @@ export default [
       }
     },
     rules: {
-      'no-console': 'warn',
+      'no-console': 'off',
       'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       'no-var': 'error',
       'prefer-const': 'error',

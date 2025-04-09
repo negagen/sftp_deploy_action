@@ -25,7 +25,7 @@ const mockFs = {
 jest.mock('fs', () => mockFs);
 
 // Import the deploy function
-const { deploy, deployWithDependencies } = require('../src/deploy');
+const { deployWithDependencies } = require('../src/deploy');
 
 describe('SFTP Deploy Action', () => {
   const originalEnv = process.env;
@@ -350,7 +350,7 @@ describe('SFTP Deploy Action', () => {
       
       // Mock exec functions
       const mockExec = {
-        getExecOutput: jest.fn().mockImplementation((command, args, options) => {
+        getExecOutput: jest.fn().mockImplementation((command) => {
           if (command === 'ssh-agent') {
             return Promise.resolve({
               stdout: 'SSH_AUTH_SOCK=/tmp/agent.1234; export SSH_AUTH_SOCK;\nSSH_AGENT_PID=1234; export SSH_AGENT_PID;\n',
@@ -451,7 +451,7 @@ describe('SFTP Deploy Action', () => {
       
       // Mock exec with SFTP failure
       const mockExec = {
-        getExecOutput: jest.fn().mockImplementation((command, args, options) => {
+        getExecOutput: jest.fn().mockImplementation((command) => {
           if (command === 'ssh-agent') {
             return Promise.resolve({
               stdout: 'SSH_AUTH_SOCK=/tmp/agent.1234; export SSH_AUTH_SOCK;\nSSH_AGENT_PID=1234; export SSH_AGENT_PID;\n',
