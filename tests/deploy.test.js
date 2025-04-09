@@ -192,7 +192,94 @@ describe('SFTP Deploy Action', () => {
       });
       
       // Verify that setSecret was called with the private key
-      expect(mockCore.setSecret).toHaveBeenCalledWith('test-key');
+      expect(mockCore.setSecret).toHaveBeenCalledWith(expect.stringMatching(/^test-key/));
+    });
+
+    test('should normalize private key by adding newline if missing', async () => {
+      // Create a mock private key without a newline at the end
+      const privateKeyWithoutNewline = 'test-key-without-newline';
+      let normalizedKey = '';
+      
+      // Mock core and ssh-add to verify the key was properly normalized
+      const mockCore = {
+        setSecret: jest.fn((key) => { normalizedKey = key; }),
+        startGroup: jest.fn(),
+        endGroup: jest.fn(),
+        info: jest.fn(),
+        error: jest.fn(),
+        warning: jest.fn()
+      };
+      
+      const mockExec = {
+        getExecOutput: jest.fn().mockImplementation((command, args, options) => {
+          if (command === 'ssh-agent') {
+            return Promise.resolve({
+              stdout: 'SSH_AUTH_SOCK=/tmp/agent.1234; export SSH_AUTH_SOCK;\nSSH_AGENT_PID=1234; export SSH_AGENT_PID;\n',
+              stderr: '',
+              exitCode: 0
+            });
+          }
+          if (command === 'ssh-add' && args[0] === '-') {
+            // Capture the key passed to ssh-add and verify it has a newline
+            const keyBuffer = options.input;
+            expect(keyBuffer.toString()).toEqual(expect.stringMatching(/.*\n$/));
+            return Promise.resolve({
+              stdout: '',
+              stderr: '',
+              exitCode: 0
+            });
+          }
+          if (command.startsWith('sftp')) {
+            return Promise.resolve({
+              stdout: '',
+              stderr: '',
+              exitCode: 0
+            });
+          }
+          return Promise.resolve({
+            stdout: '',
+            stderr: '',
+            exitCode: 0
+          });
+        }),
+        exec: jest.fn().mockResolvedValue(0)
+      };
+      
+      // Mock fs
+      const mockFileSys = {
+        readdirSync: jest.fn().mockReturnValue(['file1.js']),
+        statSync: jest.fn().mockImplementation(() => ({
+          isFile: () => true
+        })),
+        promises: {
+          writeFile: jest.fn().mockResolvedValue(undefined),
+          unlink: jest.fn().mockResolvedValue(undefined)
+        }
+      };
+      
+      // Run deploy with the key missing a newline
+      await deployWithDependencies(
+        {
+          host: 'test-host',
+          username: 'test-user',
+          privateKey: privateKeyWithoutNewline,
+          port: '22',
+          sourceDir: './dist',
+          remoteDir: '/var/www/html'
+        },
+        {
+          coreModule: mockCore,
+          execModule: mockExec,
+          fsModule: mockFileSys,
+          osModule: { tmpdir: () => '/tmp' },
+          pathModule: { join: (...args) => args.join('/') },
+          processEnv: {}
+        }
+      );
+      
+      // Verify the key was normalized (has newline at the end)
+      expect(normalizedKey).toEqual(expect.stringMatching(/.*\n$/));
+      expect(normalizedKey).toBe(privateKeyWithoutNewline + '\n');
     });
   });
 
@@ -366,7 +453,11 @@ describe('SFTP Deploy Action', () => {
             });
           }
           if (command.includes('sftp')) {
-            expect(command).toContain('sftp -b');
+            // Check that the sftp command includes the identity file and StrictHostKeyChecking=no
+            expect(command).toContain('sftp -v -o StrictHostKeyChecking=no');
+            expect(command).toContain('-o UserKnownHostsFile=/dev/null');
+            expect(command).toContain('-i /tmp/deploy_identity');
+            expect(command).toContain('-b /tmp/sftp_batch');
             expect(command).toContain('-P 22');
             expect(command).toContain('test-user@test-host');
             return Promise.resolve({
@@ -414,16 +505,15 @@ describe('SFTP Deploy Action', () => {
         pathModule: { join: (...args) => args.join('/') }
       });
       
-      // Verify batch file was created
+      // Verify identity file was created
       expect(mockFileSystem.promises.writeFile).toHaveBeenCalledWith(
-        '/tmp/sftp_batch',
-        expect.stringContaining('cd /var/www/html')
+        '/tmp/deploy_identity',
+        expect.stringMatching(/^test-key/),
+        expect.objectContaining({ mode: 0o600 })
       );
       
-      // Verify SFTP command was executed with correct parameters
-      expect(mockExec.getExecOutput).toHaveBeenCalledWith(
-        'sftp -b /tmp/sftp_batch -P 22 test-user@test-host'
-      );
+      // Verify SFTP command was executed with correct parameters - we'll check this in the mockExec implementation above
+      expect(mockExec.getExecOutput).toHaveBeenCalled();
     });
 
     test('should handle SFTP command failure', async () => {
@@ -541,7 +631,7 @@ describe('SFTP Deploy Action', () => {
             // Verify the private key is being passed correctly
             expect(options.input).toBeDefined();
             expect(Buffer.isBuffer(options.input)).toBe(true);
-            expect(options.input.toString()).toBe('test-key');
+            expect(options.input.toString()).toMatch(/^test-key/);
             return Promise.resolve({
               stdout: '',
               stderr: '',
@@ -613,7 +703,7 @@ describe('SFTP Deploy Action', () => {
       expect(mockEnv.SSH_AGENT_PID).toBe('1234');
       
       // Verify private key was masked
-      expect(mockCore.setSecret).toHaveBeenCalledWith('test-key');
+      expect(mockCore.setSecret).toHaveBeenCalledWith(expect.stringMatching(/^test-key/));
     });
 
     test('should create batch file with correct content', async () => {
@@ -639,11 +729,46 @@ describe('SFTP Deploy Action', () => {
       // Verify batch file was created with correct content
       expect(mockFs.promises.writeFile).toHaveBeenCalledWith(
         '/tmp/sftp_batch',
-        'cd /var/www/html\nput -r ./dist/*'
+        expect.stringMatching(/-mkdir \/var\/www\/html\ncd \/var\/www\/html/)
       );
+
+      // Check that the batch file contains individual put commands
+      expect(mockFs.promises.writeFile.mock.calls[0][1]).toContain('put');
     });
 
     test('should execute SFTP command with correct parameters', async () => {
+      // Create a mock exec that captures the SFTP command for verification
+      let capturedSftpCommand = '';
+      mockExec.getExecOutput = jest.fn().mockImplementation((command) => {
+        if (command === 'ssh-agent') {
+          return Promise.resolve({
+            stdout: 'SSH_AUTH_SOCK=/tmp/agent.1234; export SSH_AUTH_SOCK;\nSSH_AGENT_PID=1234; export SSH_AGENT_PID;\n',
+            stderr: '',
+            exitCode: 0
+          });
+        }
+        if (command === 'ssh-add') {
+          return Promise.resolve({
+            stdout: '',
+            stderr: '',
+            exitCode: 0
+          });
+        }
+        if (command.startsWith('sftp')) {
+          capturedSftpCommand = command;
+          return Promise.resolve({
+            stdout: 'Transfer complete',
+            stderr: '',
+            exitCode: 0
+          });
+        }
+        return Promise.resolve({
+          stdout: '',
+          stderr: '',
+          exitCode: 0
+        });
+      });
+      
       await deployWithDependencies(
         {
           host: 'test-host',
@@ -664,9 +789,9 @@ describe('SFTP Deploy Action', () => {
       );
       
       // Verify SFTP command was executed with correct parameters
-      expect(mockExec.getExecOutput).toHaveBeenCalledWith(
-        'sftp -b /tmp/sftp_batch -P 2222 test-user@test-host'
-      );
+      expect(capturedSftpCommand).toContain('-P 2222');
+      expect(capturedSftpCommand).toContain('test-user@test-host');
+      expect(capturedSftpCommand).toContain('-i /tmp/deploy_identity');
     });
 
     test('should handle errors during the process', async () => {
@@ -722,6 +847,76 @@ describe('SFTP Deploy Action', () => {
       
       // Verify error was logged
       expect(mockCore.error).toHaveBeenCalledWith(expect.stringContaining('SFTP command failed'));
+    });
+
+    test('should clean up identity file after transfer', async () => {
+      // Mock fs with tracking for unlink calls
+      const mockFileSys = {
+        readdirSync: jest.fn().mockReturnValue(['file1.js']),
+        statSync: jest.fn().mockImplementation(() => ({
+          isFile: () => true
+        })),
+        promises: {
+          writeFile: jest.fn().mockResolvedValue(undefined),
+          unlink: jest.fn().mockResolvedValue(undefined)
+        }
+      };
+      
+      // Mock exec that returns success
+      const mockExec = {
+        getExecOutput: jest.fn().mockImplementation((command) => {
+          if (command === 'ssh-agent') {
+            return Promise.resolve({
+              stdout: 'SSH_AUTH_SOCK=/tmp/agent.1234; export SSH_AUTH_SOCK;\nSSH_AGENT_PID=1234; export SSH_AGENT_PID;\n',
+              stderr: '',
+              exitCode: 0
+            });
+          }
+          if (command === 'ssh-add') {
+            return Promise.resolve({
+              stdout: '',
+              stderr: '',
+              exitCode: 0
+            });
+          }
+          return Promise.resolve({
+            stdout: '',
+            stderr: '',
+            exitCode: 0
+          });
+        }),
+        exec: jest.fn().mockResolvedValue(0)
+      };
+      
+      await deployWithDependencies(
+        {
+          host: 'test-host',
+          username: 'test-user',
+          privateKey: 'test-key',
+          port: '22',
+          sourceDir: './dist',
+          remoteDir: '/var/www/html'
+        },
+        {
+          coreModule: {
+            startGroup: jest.fn(),
+            endGroup: jest.fn(),
+            info: jest.fn(),
+            error: jest.fn(),
+            warning: jest.fn(),
+            setSecret: jest.fn()
+          },
+          execModule: mockExec,
+          fsModule: mockFileSys,
+          osModule: { tmpdir: () => '/tmp' },
+          pathModule: { join: (...args) => args.join('/') },
+          processEnv: {}
+        }
+      );
+      
+      // Verify both the identity file and batch file were deleted
+      expect(mockFileSys.promises.unlink).toHaveBeenCalledWith('/tmp/deploy_identity');
+      expect(mockFileSys.promises.unlink).toHaveBeenCalledWith('/tmp/sftp_batch');
     });
   });
 }); 

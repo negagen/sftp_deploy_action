@@ -120,8 +120,8 @@ async function deploy() {
         let privateKey = core.getInput('private_key', { required: true });
 
         // Normalize private key: ensure it ends with a newline
-        if (!privateKey.endsWith('\n')) {
-            privateKey += '\n';
+        if (privateKey && !privateKey.endsWith('\n')) {
+            privateKey = privateKey + '\n';
             console.log('Added missing newline to private key');
         }
 
@@ -154,11 +154,11 @@ async function deploy() {
         
         // List all files in source directory and create individual put commands
         // This is more reliable than put -r for some SFTP implementations
-        const files = fs.readdirSync(sourceDir, { withFileTypes: true });
+        const files = fs.readdirSync(sourceDir);
         for (const file of files) {
-            const sourcePath = path.join(sourceDir, file.name);
-            if (file.isFile()) {
-                batchFileContent += `put "${sourcePath}" "${file.name}"\n`;
+            const sourcePath = path.join(sourceDir, file);
+            if (fs.statSync(sourcePath).isFile()) {
+                batchFileContent += `put "${sourcePath}" "${file}"\n`;
             }
         }
         
@@ -251,7 +251,7 @@ module.exports = {
             port = core.getInput('port') || '22',
             sourceDir = core.getInput('source_dir', { required: true }),
             remoteDir = core.getInput('remote_dir', { required: true }),
-            privateKey = core.getInput('private_key', { required: true })
+            privateKey: initialPrivateKey = core.getInput('private_key', { required: true })
         } = params;
 
         const {
@@ -308,6 +308,15 @@ module.exports = {
             // Validate inputs
             console.log('Validating input parameters...');
             
+            // Create a modifiable copy of the private key
+            let privateKey = initialPrivateKey;
+
+            // Normalize private key: ensure it ends with a newline
+            if (privateKey && !privateKey.endsWith('\n')) {
+                privateKey = privateKey + '\n';
+                coreModule.info('Added missing newline to private key');
+            }
+
             // Mask private key in logs for security
             coreModule.setSecret(privateKey);
 
@@ -404,11 +413,11 @@ module.exports = {
             
             // List all files in source directory and create individual put commands
             // This is more reliable than put -r for some SFTP implementations
-            const files = fsModule.readdirSync(sourceDir, { withFileTypes: true });
+            const files = fsModule.readdirSync(sourceDir);
             for (const file of files) {
-                const sourcePath = pathModule.join(sourceDir, file.name);
-                if (file.isFile()) {
-                    batchFileContent += `put "${sourcePath}" "${file.name}"\n`;
+                const sourcePath = pathModule.join(sourceDir, file);
+                if (fsModule.statSync(sourcePath).isFile()) {
+                    batchFileContent += `put "${sourcePath}" "${file}"\n`;
                 }
             }
             
